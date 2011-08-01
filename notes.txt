@@ -1,0 +1,37 @@
+Horizontal movement:
+
+There is a counter, mov_cnt. If it is not zero, each frame it is decremented.  
+When reaches zero just after decrement, its velocity will be restored again 
+according to the key pressed (left or right).
+
+This counter allows for a reasonably fast and accurate movement. It is not 
+difficult to place the block where we want.
+
+The mov_cnt is initialized to the contents of variable isleft once the block 
+reaches an x position divisible by 8.
+
+The variable isleft is set to mv_cnt_0 just after left key is pressed for the 
+first time (function left_key), that is, the input1 vector (user input) varies 
+because left key is pressed. After that, when the block stops because its x 
+coord. is divisible by 8, isleft is set to mv_cnt_1 (wait fewer frames).
+
+This results on the block moving 8 pixels left, then waiting for mv_cnt_0 
+frames, then if left is kept pressed, move another 8 pixels left, wait for 
+mv_cnt_1 frames, and if left is kept pressed move another 8 pixels and wait for 
+another mv_cnt_1 frames, etc...
+
+Same for right movement. Not sure if there is the need of two counters isright, 
+isleft. For now, if only one is used, then mov_cnt gets reseted to mv_cnt_0, as 
+the right key is not pressed.
+
+NPC:
+
+A better handling of last_sprt variable is required. The game works fine as it 
+is, but only because the score hints are relatively short lived, about a 
+second. The last_sprt variable is cleared only when the last npc is deleted, so 
+in theory, if enough npcs are present, the game will behave strangely, and very 
+probably crashing.
+
+
+
+

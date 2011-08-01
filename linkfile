@@ -1,0 +1,6 @@
+[objects]
+tesel.o
+
+[libraries]
+bank 0 slot 1 libv9990.o
+bank 0 slot 1 ../blank_rom/libslots.o

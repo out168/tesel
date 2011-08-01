@@ -1,0 +1,495 @@
+;========================================================================
+; Select the .BANK and .SLOT on which the code of the library
+; has to be relocated on the linking file.
+;========================================================================
+
+;========================================================================
+; Functions for the V9990.
+;========================================================================
+
+;.INCDIR "../"
+;.INCLUDE "bioswla.z80"
+
+; Initialization of P1 mode.
+; Transfer RAM -> VRAM.
+; Syncronization.
+; Sprites.
+
+;========================================================================
+; Variables
+;========================================================================
+
+.EQU v9990 $60 ; port v9990 msx
+
+;========================================================================
+; Macros
+;========================================================================
+
+; input: ADE = VRAM address
+.MACRO SetupWriteVRAM
+    ld c,v9990+4
+    ;ld b,0
+    ;out (c),b
+    .DB $ed,$71 ;(out (c),0)
+    dec c
+    out (c),e
+    out (c),d
+    out (c),a
+.ENDM
+
+;========================================================================
+; Code sections
+;========================================================================
+
+.SECTION "Initialization" FREE
+.block "Initv9990" 
+
+    ; ********************************************************************************
+    ; initializes the P1 mode with default params. and given palette
+    ; HL = palette data
+    ; A = %000xyz0 high bits of VRAM address of sprite pattern
+    ; ********************************************************************************
+    InitP1:
+        call init_sprite_pattern ; in this order!!
+        call init_pattern_mode
+        call init_palette
+        ret
+
+    ; ********************************************************************************
+    ; initializes the P1 mode with default params.
+    ; ********************************************************************************
+    InitP1Default:
+        ld a,4
+        ld hl,DefaultPData
+        call InitP1
+        ret
+
+    ; ********************************************************************************
+    ; selects pattern mode 1
+    ; modify: A
+    ; ********************************************************************************
+    init_pattern_mode:
+        xor a
+        out (v9990+7),a
+        ld a,$6
+        out (v9990+4),a
+        ld a,$00
+        out (v9990+3),a
+        ld a,$00
+        out (v9990+3),a
+
+        ; this is needed in order to 
+        ; display vram contents
+        ; instead of the backdrop color
+        ld a,$82
+        out (v9990+3),a
+        ret
+
+    ; ********************************************************************************
+    ; sets the address for the sprite patterns 
+    ; reg 25: offset
+    ; A = %000xyz0 not checked
+    ; xyz: bits A17,A16,A15 of VRAM address
+    ; of the sprite pattern table start
+    ; usually A=4 (=> address is $10000)
+    ; modify BC
+    ; ********************************************************************************
+    init_sprite_pattern:
+        ld b,25
+        ld c,v9990+4
+        out (c),b
+        dec c
+        out (c),a
+        ret
+
+    ; ********************************************************************************
+    ; initializes the four palettes with the standard MSX colors
+    ; palettes 1, 2, and 3 are dimmer versions of palette 0.
+    ; modify: A,BC
+    ; input: HL address of palette
+    ; needs pdata
+    ; ********************************************************************************
+    init_palette:
+        ld a,13
+        out (v9990+4),a
+        ld a,%00000100
+        out (v9990+3),a
+        ;out (v9990+3),a
+
+        ld c,v9990+1
+        ld b,192
+        otir
+        ret
+
+.endb
+.ENDS
+
+.SECTION "SynchronizationV9990" FREE
+.block "Syncv9990"
+
+    ; ********************************************************************************
+    ; from v9990 manual
+    ; wait till the next start of vertical nondisplay
+    ; sometimes a frame is lost (??)
+    ; modify: A
+    ; ********************************************************************************
+    wait_vsync:
+        in a,(v9990+5)
+        and $40
+        jr nz,wait_vsync
+-       in a,(v9990+5)
+        and $40
+        jr z,-
+        ret
+
+    ; ********************************************************************************
+    ; assumes that b6 of in(status port) is 0 while displaying lines x-x+212
+    ; when b6 changes to 1, vblank period starts
+    ; modify: A
+    ; ********************************************************************************
+    wait_vblank:
+        in a,(v9990+5)
+        and $40
+        jr z,wait_vblank
+        ret
+
+    ; ********************************************************************************
+    ; wait till vblank ends
+    ; modify: A
+    ; ********************************************************************************
+    wait_vstart:
+        in a,(v9990+5)
+        and $40
+        jr z,wait_vstart
+-       in a,(v9990+5)
+        and $40
+        jr nz,-
+        ret
+
+.endb
+.ENDS
+
+.SECTION "Transfer" FREE
+.BLOCK "v9990_transfer"
+    ; ********************************************************************************
+    ; HL: ram address
+    ; ADE: vram address
+    ; BC: #bytes
+    ; modifies: A,HL,BC
+    ; does not change the value of A in the VRAM address, beware!
+    ; ********************************************************************************
+    Ram2Vram:
+        push af
+        
+        ; setup vram address
+        xor a
+        out (v9990+4),a
+        ld a,e
+        out (v9990+3),a
+        ld a,d
+        out (v9990+3),a
+        pop af
+        out (v9990+3),a
+
+        ; init loop
+        ; b=0 -> no loop for b
+        ld a,b
+        or a
+        jp z,loop2
+        
+        push bc
+
+        ld c,v9990
+        ; 256 loops for each b
+    loop:
+        ld a,b
+        ld b,0
+        otir
+        ld b,a
+        djnz loop
+
+        pop bc
+        ; if c==0 return
+    loop2:
+        ld a,c
+        or a
+        ret z
+        ; if c!=0 a last otir is required
+        ld b,c
+        ld c,v9990
+        otir
+        ret
+
+    ; ********************************************************************************
+    ; less than 257 bytes
+    ; HL: RAM address
+    ; ADE: VRAM address
+    ; B: #bytes
+    ; modifies: A,HL,BC
+    ; does not change the value of A in the VRAM address, beware!
+    ; ********************************************************************************
+    rvshrt:
+        push af
+        
+        ; setup vram address
+        xor a
+        out (v9990+4),a
+        ld a,e
+        out (v9990+3),a
+        ld a,d
+        out (v9990+3),a
+        pop af
+        out (v9990+3),a
+
+        ld c,v9990
+        otir
+        ret
+
+    ; ********************************************************************************
+    ; less than 257 bytes
+    ; HL: RAM address
+    ; ADE: VRAM address
+    ; B: #bytes
+    ; modifies: A,HL,BC
+    ; does not change the value of A in the VRAM address, beware!
+    ; ********************************************************************************
+    rvshrt2:
+        ld c,v9990+4 
+        .DB $ed,$71
+        dec c
+        out (c),e
+        out (c),d
+        out (c),a
+
+        ld c,v9990
+-       outi
+        .DB $ed,$71
+        inc b
+        djnz -
+        ret
+
+.ENDB
+.ENDS
+
+.SECTION "Sprites" FREE
+.block "v9990_sprites"
+
+    ; ********************************************************************************
+    ; puts sprites with attributes stored in RAM
+    ; HL: RAM address
+    ; B: # of sprites x 4
+    ; modifies A,BC,DE,HL
+    ; ********************************************************************************
+    PutSprites:
+        ld a,3
+        ld de,$fe00
+        PutSprites0:
+        call rvshrt
+        ret
+
+    ; ********************************************************************************
+    ; Disables all sprites by setting PR1 bit of the sprite attribute
+    ; and resetting all the remaining bits
+    ; modifies: A,BC,DE,HL
+    ; ********************************************************************************
+    DisableAllSprites:
+        ld b,125
+        ld de,$fe00
+-       push bc
+        ld hl,clear_sprite
+        ld b,4
+        ld a,3
+        call rvshrt
+        inc de
+        inc de
+        inc de
+        inc de
+        pop bc
+        djnz -
+        ret
+
+    clear_sprite:
+        .DB 0,0,0,%00010000 ; disable sprite
+.endb
+.ENDS
+
+.SECTION "Tiles" FREE
+.block "tiles_v9990"
+
+    ; ********************************************************************************
+    ; LAYER A
+    ; Prints a number of tiles (with tile number indicated as a byte)
+    ; pointed by HL, to destination DE (0-4095)
+    ; Intended for printing small texts, scores...
+    ; --------------------------------------------------------------------------------
+    ; HL: ram address
+    ; DE: destination tile
+    ; B: number of tiles
+    ; modifies: A,HL,BC
+    ; ********************************************************************************
+    PrintTilesA:
+        push de
+        ; 2*de+c000
+        ld a,d
+        and $3f
+        sla e
+        rla 
+        add a,$c0
+        ld d,a
+        
+        ; setup vram address
+        xor a
+        out (v9990+4),a
+        ld a,e
+        out (v9990+3),a
+        ld a,d
+        out (v9990+3),a
+        ld a,7
+        out (v9990+3),a
+        ;push bc
+        ;SetupWriteVRAM
+        ;pop bc
+-       ld a,(hl)
+        out (v9990),a
+        inc hl
+        xor a
+        out (v9990),a
+        ;inc de
+        ;inc de
+        djnz -
+        pop de
+        ret
+
+    ; ********************************************************************************
+    ; LAYER B
+    ; Prints a number of tiles (with tile number indicated as a byte)
+    ; pointed by HL, to destination DE (0-4095)
+    ; Intended for printing small texts, scores...
+    ; --------------------------------------------------------------------------------
+    ; HL: ram address
+    ; DE: destination tile
+    ; B: number of tiles
+    ; modifies: A,HL,BC
+    ; ********************************************************************************
+    PrintTilesB:
+        push de
+        ; 2*de+e000
+        ld a,d
+        and $3f
+        sla e
+        rla 
+        add a,$e0
+        ld d,a
+        
+        ; setup vram address
+        xor a
+        out (v9990+4),a
+        ld a,e
+        out (v9990+3),a
+        ld a,d
+        out (v9990+3),a
+        ld a,7
+        out (v9990+3),a
+        ;push bc
+        ;SetupWriteVRAM
+        ;pop bc
+-       ld a,(hl)
+        out (v9990),a
+        inc hl
+        xor a
+        out (v9990),a
+        ;inc de
+        ;inc de
+        djnz -
+        pop de
+        ret
+
+
+        
+
+.endb
+
+.ENDS
+
+;========================================================================
+; Data sections
+;========================================================================
+
+; Palette data
+.SECTION "DefaultData" FREE
+.block "v9990_default_palette"
+
+    DefaultPData:
+    ;palette 0
+        .DB 4*0,4*0,4*0
+        .DB 4*0,4*0,4*0
+        .DB 4*1,4*6,4*1
+        .DB 4*3,4*7,4*3
+        .DB 4*1,4*1,4*7
+        .DB 4*2,4*3,4*7
+        .DB 4*5,4*1,4*1
+        .DB 4*2,4*6,4*7
+        .DB 4*7,4*1,4*1
+        .DB 4*7,4*3,4*3
+        .DB 4*6,4*6,4*1
+        .DB 4*6,4*6,4*4
+        .DB 4*1,4*4,4*1
+        .DB 4*6,4*2,4*5
+        .DB 4*5,4*5,4*5
+        .DB 4*7,4*7,4*7
+    ;palette 1
+        .DB 3*0,3*0,3*0
+        .DB 3*0,3*0,3*0
+        .DB 12,12,12
+        .DB 14,14,14
+        .DB 8,8,14
+        .DB 10,10,16
+        .DB 3*5,3*1,3*1
+        .DB 14,14,20
+        .DB 3*7,3*1,3*1
+        .DB 3*7,3*3,3*3
+        .DB 3*6,3*6,3*1
+        .DB 3*6,3*6,3*4
+        .DB 10,10,10
+        .DB 3*6,3*2,3*5
+        .DB 3*5,3*5,3*5
+        .DB 3*7,3*7,3*7
+    ;palette 2
+        .DB 2*0,2*0,2*0
+        .DB 2*0,2*0,2*0
+        .DB 2*1,2*6,2*1
+        .DB 2*3,2*7,2*3
+        .DB 2*1,2*1,2*7
+        .DB 2*2,2*3,2*7
+        .DB 2*5,2*1,2*1
+        .DB 2*2,2*6,2*7
+        .DB 2*7,2*1,2*1
+        .DB 2*7,2*3,2*3
+        .DB 2*6,2*6,2*1
+        .DB 2*6,2*6,2*4
+        .DB 2*1,2*4,2*1
+        .DB 2*6,2*2,2*5
+        .DB 2*5,2*5,2*5
+        .DB 2*7,2*7,2*7
+    ;palette 3
+        .DB 1*0,1*0,1*0
+        .DB 1*0,1*0,1*0
+        .DB 1*1,1*6,1*1
+        .DB 1*3,1*7,1*3
+        .DB 1*1,1*1,1*7
+        .DB 1*2,1*3,1*7
+        .DB 1*5,1*1,1*1
+        .DB 1*2,1*6,1*7
+        .DB 1*7,1*1,1*1
+        .DB 1*7,1*3,1*3
+        .DB 1*6,1*6,1*1
+        .DB 1*6,1*6,1*4
+        .DB 1*1,1*4,1*1
+        .DB 1*6,1*2,1*5
+        .DB 1*5,1*5,1*5
+        .DB 1*7,1*7,1*7
+.endb
+
+.ENDS
+
+

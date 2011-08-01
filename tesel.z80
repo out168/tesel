@@ -1,0 +1,2373 @@
+;========================================================================
+; Blank rom of 16Kb
+; -----------------------------------------------------------------------
+; No slot swapping is needed here as only 
+; slot 1 ($4000-$7fff) is used by this rom.
+; Prints the "@" symbol in the default screen mode
+; and at the default position (about top-left usually)
+;========================================================================
+
+.incdir "../"
+.include "bioswla.z80"
+
+;========================================================================
+; MSX memory layout
+;========================================================================
+.MEMORYMAP
+    DEFAULTSLOT 1
+    ; ROM area
+    SLOTSIZE $4000
+    SLOT 0 $0000
+    SLOT 1 $4000
+    SLOT 2 $8000
+    ; RAM area (MSX lowest is 8Kb @ $e000!!)
+    SLOTSIZE $2000
+    SLOT 3 $e000
+    SLOT 4 $c000
+.ENDME
+
+;========================================================================
+; This rom memory layout
+; One entire bank of 16 Kb
+;========================================================================
+.ROMBANKMAP
+    BANKSTOTAL 1
+    BANKSIZE $4000
+    BANKS 1
+.ENDRO
+
+;========================================================================
+; Data structures
+;========================================================================
+.STRUCT sprite
+    yc:  DB
+    pat: DB
+    xc:  DB
+    atr: DB
+.ENDST
+
+.STRUCT speed_tbl
+    vy: DB
+    vx: DB
+.ENDST
+
+.STRUCT block
+    sp0: DB ; sprite pattern #0
+    sp1: DB ; sprite pattern #1
+    offx: DB ; sprite #1 xoffset (0 or 16)
+    offy: DB ; sprite #1 yoffset (0 or 16)
+    lins: DB ; lines to check if filled
+    type: DB ; not going to be used
+    next: DW ; pointer to next block when rotated
+    off0: DB ; first block RAM offset
+    off1: DB ; second block RAM offset
+    off2: DB ; third block RAM offset
+    off3: DB ; fourth block RAM offset
+    off0s: DB ; first block screen offset
+    off1s: DB ; second block screen offset
+    off2s: DB ; third block screen offset
+    off3s: DB ; fourth block screen offset
+    tile0: DB ; screen representation of block
+    tile1: DB ; screen representation of block
+    tile2: DB ; screen representation of block
+    tile3: DB ; screen representation of block
+.ENDST
+
+.STRUCT userinput
+    left:  DB
+    right: DB
+    rot:   DB
+    down:  DB
+.ENDST
+
+.STRUCT npc
+    numsp: DB
+    spr: DW ; pointer to sprite
+    vel: DW ; vx are zero
+    firstplane: DB ; plane of first sprite
+    framecnt: DB
+    unused: DB 
+.ENDST
+
+
+;========================================================================
+; Constants
+;========================================================================
+
+.EQU tile_offset 48
+
+; masks for keypresses
+.EQU KEY_LEFT 16
+.EQU KEY_UP 32
+.EQU KEY_DOWN 64
+.EQU KEY_RIGHT 128
+.EQU KEY_SPACE 1
+
+; when a piece moves horizontally and x mod 8 == 0,
+; its horizontal movement is paused for a number of frames
+.EQU MV_CNT_0 10 ; frames to wait x movement, first pause
+.EQU MV_CNT_1 2 ; frames to wait x movement, subsequent pauses
+
+; these will be RAM variables
+.EQU right_vel %00100001
+.EQU left_vel  %11100001
+
+.EQU npc_upvel %11111100
+.EQU npc_numframes 60 ; frames that the score hint exists
+.equ npc_base $e200
+.equ disable_sprite_data $ee00
+.equ sprttable_base $e400 ; 4 bytes per sprite
+.equ veltable_base $ea00 ; 2 bytes per sprite
+.equ one_line_left_tile $7e
+.equ default_slow_vel %00001100
+.equ default_fast_vel %00010001
+
+;========================================================================
+; Macros
+;========================================================================
+
+; input: ADE = VRAM address
+.MACRO SetupWriteVRAM
+    ld c,$64
+    ld b,0
+    out (c),b
+    dec c
+    out (c),e
+    out (c),d
+    out (c),a
+.ENDM
+
+;========================================================================
+; RAM variables
+;========================================================================
+.RAMSECTION "Vars" SLOT 3
+    input1: DB
+    input1_shadow: DB
+    mov_cnt: DB
+    isleft: DB
+    isright: DB
+    block0: INSTANCEOF sprite
+    block1: INSTANCEOF sprite
+    vel0: INSTANCEOF speed_tbl
+    vel1: INSTANCEOF speed_tbl
+    currentblock: INSTANCEOF block
+    tick: DB 
+    sec_elapsed: DB
+    min_elapsed: DB
+    hour_elapsed: DB
+    userinput: INSTANCEOF userinput
+    game_area: DS 23*16
+    piece_origin: DW
+    ycordcomp: DB
+    piece_origin_screen: DW
+    virtualblock: INSTANCEOF block
+    nextblock: DW
+    blockn0: INSTANCEOF sprite
+    blockn1: INSTANCEOF sprite
+    marked: DB
+    current_line: DW
+    nlines0: DB
+    nlines1: DB
+    score0: db
+    score1: db
+    score2: db
+    score3: db
+    temp_msg: DS 8 ;20?
+    temp_msg1: DS 8 ;20?
+    lock_space: DB 
+    numnpc: DB
+    last_sprt: DW
+    last_velt: DW
+    last_npc: DW
+    last_plane: db
+    slow_vel: db ; %00001100
+    fast_vel: db ; %00010001
+    hint_y: db
+    idc: db ; keep this!
+    hint_x: db
+    level: db ; 0, 1, 2, 3, 4
+    mult: db ; 0, 1, 2, 3, 4, 5, 6, 7
+    next_badge: dw
+    next_levup: dw
+    next_speed: dw
+    nlines2: db
+    top_ram: db
+.ENDS
+
+;========================================================================
+; Empty fill: free bytes in the ROM are filled with this value
+;========================================================================
+.EMPTYFILL $FF
+
+;========================================================================
+; ROM Header
+;========================================================================
+.BANK 0 
+.ORG 0 ; with respect to .rom file
+
+.SECTION "bankheader" FORCE
+    .DB "AB"
+    .DW start
+.ENDS
+
+;========================================================================
+; Code sections
+; -----------------------------------------------------------------------
+; This program has to be linked with libv9990.o
+;========================================================================
+.BANK 0 SLOT 1
+.ORGA $4010
+
+.SECTION "Main" FREE
+
+
+    start:
+        ; print message in normal VDP mode
+        ld a,64
+        call $a2
+
+        ; set P1 pattern mode with default palettes
+        ; sprite pattern starts at $10000
+        call InitP1Default
+
+        ; perform some initialization
+        call DisableAllSprites
+        call clear_ram
+        call load_sprites
+        call load_tiles
+        call print_game_area
+        call print_nextb_frame
+        call print_lines_frame
+        call print_time_mesg
+
+        ; set initial block
+        ld hl,b3
+        ld a,(slow_vel)
+        call setup_block
+
+        ; prepare game area in ram
+        call setup_game_area
+
+    mainloop:
+
+        call wait_vsync
+        call tictac
+
+        ; display a two sprite block
+        ld hl,block0
+        ld b,8 ; 2 sprites
+        ld a,3
+        ld de,$fee0
+        call PutSprites0
+        
+        ld a,(numnpc)
+        or a
+        call nz,display_npc
+
+        call user_input
+        call update_vel
+
+        ; update block position (2 sprites)
+        ld hl,vel0 ; vel table start
+        ld de,block0 ; attrib table
+        ld b,2
+        call update_positions
+        call check_piece
+        call check_vertical_movement
+        call update_lines
+        call update_score
+        call update_clock
+
+        jp mainloop
+
+.ENDS    
+
+.SECTION "InitCode" FREE
+.BLOCK "InitCode"
+    clear_ram:
+        ; clear ram data
+        ld hl,block0
+        ld de,block0+1
+        ld bc,$1000
+        ld (hl),0
+        ldir
+
+        ld hl,sprttable_base
+        ld (last_sprt),hl
+        ld hl,npc_base
+        ld (last_npc),hl
+        ;ld (last_velt),hl
+
+        ld hl,(npcveltab)
+        ld (veltable_base),hl
+        ld hl,veltable_base
+        ld de,veltable_base+2
+        ld bc,$ff
+        ldir
+
+        ld hl,disable_sprite_data
+        ld de,disable_sprite_data+1
+        ld bc,$100
+        ld (hl),$10 ;disable data, hidden attrib set to 1
+        ldir
+
+        ld hl,slow_vel
+        ld (hl),default_slow_vel 
+        inc hl
+        ld (hl),default_fast_vel
+        ld hl,465+192*2+64
+        ld (next_badge),hl
+        ld hl,levup_table
+        ld (next_levup),hl
+        ld hl,spd_table
+        ld (next_speed),hl
+        ;ld hl,mult
+        ;ld (hl),7
+
+        ret
+
+    load_tiles:
+        ; load tiles to VRAM, layer A
+        ld hl,tiles
+        ld a,0
+        ld de,$0
+        ld bc,$1000
+        call Ram2Vram
+
+        ; load tiles to VRAM, layer B
+        ld hl,tilesb
+        ld a,4
+        ld de,$0
+        ld bc,$800
+        call Ram2Vram
+        ret
+
+    load_sprites:
+        ; load sprites to VRAM
+        ld hl,patterns
+        ld a,1
+        ld de,$0
+        ld bc,$1800
+        call Ram2Vram
+        ret
+
+    ; ********************************************************************************
+    ; initialise block data
+    ; calls game over if needed
+    ; --------------------------------------------------------------------------------
+    ; HL = block definition (there are 19 such blocks)
+    ; A = initial velocity of the block
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    setup_block:
+
+        push hl
+        ld de,currentblock
+        ld bc,20
+        ldir
+        ld hl,game_area+5
+        ld (piece_origin),hl
+        ld hl,134
+        ld (piece_origin_screen),hl
+        push af
+        ld a,16
+        ld (ycordcomp),a
+        pop af
+        pop hl
+
+
+
+        ; set initial velocity
+        ld (vel0.vy),a
+        ld (vel1.vy),a
+
+        ld a,(hl)
+        ld (block0.pat),a
+        inc hl ; inc l?
+        ld a,(hl)
+        ld (block1.pat),a
+        ld a,48
+        ld (block0.xc),a
+        inc hl
+        add a,(hl)
+        ld (block1.xc),a
+        ld a,8
+        ld (block0.yc),a
+        inc hl
+        add a,(hl)
+        ld (block1.yc),a
+        xor a
+        ld (block0.atr),a
+        ld (block1.atr),a
+        
+        ld a,MV_CNT_0
+        ld (isleft),a
+        ;ld (isright),a ;??
+
+        ; check free space
+        ld hl,(piece_origin)
+        call check_available_space
+        jp nz,game_over
+
+        call select_next_block
+        ; print next block somewhere
+        ld hl,(nextblock)
+
+        ld a,(hl)
+        ld (blockn0.pat),a
+        inc hl ; inc l?
+        ld a,(hl)
+        ld (blockn1.pat),a
+        ld a,136
+        ld (blockn0.xc),a
+        inc hl
+        add a,(hl)
+        ld (blockn1.xc),a
+        ld a,23
+        ld (blockn0.yc),a
+        inc hl
+        add a,(hl)
+        ld (blockn1.yc),a
+        xor a
+        ld (blockn0.atr),a
+        ld (blockn1.atr),a
+        
+        ld a,3
+        ld de,$fee8
+        ld hl,blockn0
+        ld b,8
+        call PutSprites0
+
+        ret
+
+    ; ********************************************************************************
+    ; RAM game data consists of 23*16 bytes in ram.
+    ; 16 bytes per line, and 20 available for the game.
+    ; 2 lines are buffer, and the remaining is the lower border.
+    ; RAM contents: 0 -> free space
+    ;               $ff -> border
+    ;               n -> tile code
+    ; ********************************************************************************
+    setup_game_area:
+        ld de,16
+        ld a,$ff ; border code
+
+        ; left border
+        ld b,22
+        ld hl,game_area
+-       ld (hl),a
+        add hl,de
+        djnz -
+
+        ; right border
+        ld b,22
+        ld hl,game_area+11
+-       ld (hl),43 ; right border
+        add hl,de
+        djnz -
+
+        ; lower border
+        ld bc,15
+        ld hl,game_area+22*16
+        ld de,game_area+22*16+1
+        ld (hl),a
+        ldir
+        ret
+
+    ; ********************************************************************************
+    ; print game area
+    ; ********************************************************************************
+    print_game_area:
+        ld hl,zero_line
+        ld b,1
+        ld de,76
+        call PrintTilesA
+        ld hl,zero_line
+        ld b,1
+        ld de,12
+        call PrintTilesA
+
+        ld hl,first_line
+        ld b,14
+        ld de,128
+        call PrintTilesA
+
+        ld b,21
+        ld de,192
+-       push bc
+        ld b,14
+        ld hl,second_line
+        call PrintTilesA
+        pop bc
+        ld hl,64
+        add hl,de
+        ex de,hl
+        djnz -
+
+        ld hl,last_line
+        ld b,14
+        ;ld de,128
+        call PrintTilesA
+
+        ;background layer
+        ld b,8
+        ld de,0
+-       push bc
+        ld hl,backgrnd0
+        ld b,13
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,backgrnd1
+        ld b,13
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,backgrnd2
+        ld b,13
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        pop bc
+        djnz -
+        
+        ld b,8
+        ld de,12
+-       push bc
+        ld hl,decoblock0
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock1
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock2
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        pop bc
+        djnz -
+        
+
+        ld b,7
+        ld de,192
+-       push bc
+        ld hl,decoblock0
+        ld b,2
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock1
+        ld b,2
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock2
+        ld b,2
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        pop bc
+        djnz -
+
+        ld b,1
+        ld de,1536
+        ld hl,decoblock0
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock1
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock2
+        ld b,21
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+
+        ld b,1
+        ld de,1557
+        ld hl,decoblock0
+        ld b,12
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock1
+        ld b,12
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+        ld hl,decoblock2
+        ld b,12
+        call PrintTilesB
+        ld hl,64
+        add hl,de
+        ex de,hl
+
+        ret
+
+    ; ********************************************************************************
+    ; print next block frame
+    ; ********************************************************************************
+    print_nextb_frame:
+        ;ld hl,frame0
+        ;ld b,6
+        ;ld de,144
+        ;call PrintTilesA
+        ;ld hl,frame1
+        ;ld b,6
+        ;ld de,208
+        ;call PrintTilesA
+        ;ld hl,frame1
+        ;ld b,6
+        ;ld de,272
+        ;call PrintTilesA
+        ;ld hl,frame2
+        ;ld b,6
+        ;ld de,336
+        ;call PrintTilesA
+        ld hl,next_msg
+        ld b,4
+        ld de,81
+        call PrintTilesA
+        ret
+
+    print_lines_frame:
+        ;ld hl,frame0
+        ;ld b,6
+        ;ld de,528
+        ;call PrintTilesA
+        ;ld hl,frame1
+        ;ld b,6
+        ;ld de,592
+        ;call PrintTilesA
+        ;ld hl,frame2
+        ;ld b,6
+        ;ld de,656
+        ;call PrintTilesA
+        ld hl,lines_msg
+        ld b,5
+        ld de,465
+        call PrintTilesA
+        ld hl,score_msg
+        ld b,5
+        ld de,465+192
+        call PrintTilesA
+        ld hl,level_msg
+        ld b,5
+        ld de,465+192*2
+        call PrintTilesA
+        call print_badge
+        ld hl,bonus_msg
+        ld b,5
+        ld de,465+192*3+64
+        call PrintTilesA
+        call print_bonus
+
+        ret
+
+    print_badge:
+        ld hl,badge_up
+        ld b,1
+        ld de,(next_badge)
+        call PrintTilesA
+        ld hl,(next_badge)
+        ld de,64
+        add hl,de
+        ex de,hl
+        ld b,1
+        ld hl,badge_down
+        call PrintTilesA
+        ld hl,(next_badge)
+        inc hl
+        ld (next_badge),hl
+        ret
+
+    print_bonus:
+        ld de,465+192*3+128
+        ld b,8
+        ld hl,bonus_off
+        call PrintTilesA
+        ld de,465+192*3+128
+        ld a,(mult)
+        ld b,a
+        inc b
+-       ld hl,bonus_on
+        push bc
+        call PrintTilesA
+        inc de
+        pop bc
+        djnz -
+        ret
+
+    print_time_mesg:
+        ld b,9
+        ld de,23*64+22
+        ld hl,time_msg
+        call PrintTilesA
+        ret
+
+
+.ENDB
+.ENDS
+
+.SECTION "Engine" FREE
+.BLOCK "Engine"
+
+    ; ********************************************************************************
+    ; update sprite position according to velocity table
+    ; --------------------------------------------------------------------------------
+    ; B = # sprites to update
+    ; HL = velocity table
+    ; DE = sprite attributes table
+    ; --------------------------------------------------------------------------------
+    ; vel table: vely0,velx0,vely1,velx1,...
+    ; velocity: %vvvvvsss
+    ; vvvvv:5bit signed velocity (~ in pixels/0.016sec)
+    ; sss:3bit value which determines if 
+    ; sprite has to be updated in current_tick
+    ;      sss=1 -> every tick
+    ;      sss=2 -> every other tick
+    ;      sss=3 -> one out of three ticks
+    ;      sss=4 -> one out of four ticks
+    ;      other sss: unpredictable results
+    ; ********************************************************************************
+    update_positions:
+        ; init
+        ;ld hl,ram_vel_table
+        ;ld de,block
+
+        ; for every sprite (b=#sprites)
+    @loop:
+
+        ; skip y comp?
+        ld a,(hl) ; a = vely
+        and 7   ; a = skip value
+        call skip_this_comp
+        jr nz,@next_comp
+
+        ; update y position according to vely
+    @cont:
+        ld a,(hl)
+        sra a
+        sra a
+        sra a ; get vely with sign
+        ex de,hl
+        ld c,(hl)
+        add a,c
+        ld (hl),a
+        ex de,hl
+
+        ; update x position according to velx
+    @next_comp:
+        inc l
+        ; sprite attrib offset in e
+        ; sprite attribs in v9990: ypos,pattern,xpos,control+xpos
+        ; hence the two inc e
+        inc e
+        inc e 
+
+        ; skip x comp?
+        ld a,(hl) ; a = velx
+        and 7   ; a = skip value
+        call skip_this_comp
+        jr nz,@next_sp
+
+        ld a,(hl)
+        sra a
+        sra a
+        sra a ; get velx with sign
+        ex de,hl
+        ld c,(hl)
+        add a,c
+        ld (hl),a
+        ex de,hl
+
+    @next_sp:
+        inc l
+        inc e
+        inc e
+        djnz @loop
+        ret
+
+    ; ********************************************************************************
+    ; wheter to skip updating the given component for the current tick
+    ; --------------------------------------------------------------------------------
+    ; A = tick
+    ; --------------------------------------------------------------------------------
+    ; output: flag Z reset -> skip
+    ; modify: --
+    ; ********************************************************************************
+    skip_this_comp:
+        cp 1
+        jr nz,@is2
+        and 0 ; set flag z
+        ret
+    @is2:
+        cp 2
+        jr nz,@is3
+        ld a,(tick)
+        and 1
+        ret
+    @is3:
+        cp 3
+        jr nz,@is4
+        ld a,(tick)
+        push de
+        call mult3_lookup
+        pop de
+        or a
+        ret
+    @is4:
+        ld a,(tick)
+        and 3
+        ret
+
+    ; ********************************************************************************
+    ; A mod 3?
+    ; requires a 256 boundary aligned 256 byte table
+    ; --------------------------------------------------------------------------------
+    ; output: A=A mod 3 (i.e., A=0,1,2)
+    ; modify: A,DE
+    ; ********************************************************************************
+    mult3_lookup:
+        ld de,mod3 ;256 byte aligned !!
+        ld e,a
+        ld a,(de)
+        ret
+
+    ; ********************************************************************************
+    ; change piece on the fly
+    ; --------------------------------------------------------------------------------
+    ; HL = new piece
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    change_block:
+        push hl
+        ld de,currentblock
+        ld bc,20
+        ldir
+        ; in principle the offset do not change if the piece is rotated
+        ; so there is nothing to do here.
+        pop hl
+
+        ; change sprites
+        ld a,(hl)
+        ld (block0.pat),a
+        inc hl ; inc l?
+        ld a,(hl)
+        ld (block1.pat),a
+        ; change sprite #1 x according to offset
+        ld a,(block0.xc)
+        inc hl
+        add a,(hl)
+        ld (block1.xc),a
+        ; change sprite #1 y according to offset
+        ld a,(block0.yc)
+        inc hl
+        add a,(hl)
+        ld (block1.yc),a
+        
+        ret
+
+    ; ********************************************************************************
+    ; sets tiles of the current block in RAM game area.
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    set_current_in_ram:
+        ld b,4 ; number of blocks to set
+        ld ix,currentblock.off0
+        ld d,0
+        ld hl,(piece_origin)
+-       ld e,(ix+0)
+        add hl,de
+        ld a,(ix+8) ; points to tile number
+        inc ix
+        ld (hl),a
+        djnz -
+        ret
+
+    ; ********************************************************************************
+    ; check if a falling block fits on the given position in game RAM area
+    ; --------------------------------------------------------------------------------
+    ; HL = RAM position to check
+    ; --------------------------------------------------------------------------------
+    ; output: flag Z set -> there is space available in game RAM area
+    ; modify: all
+    ; ********************************************************************************
+    check_available_space:
+        ld de,currentblock.off0
+    check_available_space0:
+        ld b,4
+-       ld a,(de)
+        push bc
+        ld c,a
+        ld b,0
+        add hl,bc
+        pop bc
+        ld a,(hl)
+        or a
+        ret nz ; if content is not zero return, with flag Z reset
+        inc de
+        djnz -
+        and 0 ; set flag Z? if code reaches this point, all blocks are free
+        ret
+
+    ; ********************************************************************************
+    ; Hides block
+    ; ********************************************************************************
+    clear_block:
+        ld a,%00010000
+        ld (block0.atr),a
+        ld (block1.atr),a
+        ld hl,block0
+        ld b,8
+        ld a,3
+        ld de,$fee0
+        call PutSprites0
+        ret
+
+    ; ********************************************************************************
+    ; Game Over
+    ; ********************************************************************************
+    game_over:
+        ld hl,block0
+        ld b,8
+        ld a,3
+        ld de,$fee0
+        call PutSprites0
+        ld hl,game_over_msg
+        ld b,9
+        ;ld a,7
+        ld de,899
+        call PrintTilesA
+        _go0:
+        jp _go0
+
+    ; ********************************************************************************
+    ; Select next block, "randomly"
+    ; --------------------------------------------------------------------------------
+    ; output: (nextblock) <- direction of new block
+    ; modify: A,DE,HL
+    ; ********************************************************************************
+    select_next_block:
+        ld de,piece_list
+        ;ld a,(tick)
+        ld a,r
+        and 7
+        rlca
+        ld l,a
+        ld h,0
+        add hl,de
+        ex de,hl
+        ;ld hl,(de)
+        ld a,(de)
+        ld (nextblock),a
+        inc de
+        ld a,(de)
+        ld (nextblock+1),a
+        ;ld l,a
+        ;inc de
+        ;ld a,(de)
+        ;ld h,a
+        ;ld (nextblock),hl
+        ret
+
+
+
+.ENDB
+.ENDS
+
+.SECTION "UserInput" FREE
+
+    ; ********************************************************************************
+    ; updates the user input vector accordingly
+    ; --------------------------------------------------------------------------------
+    ; modify: AF, C, HL
+    ; ********************************************************************************
+    user_input:
+        ld hl,input1
+        /*
+        ld de,input1_shadow
+        ldi
+        */
+        ld a,(hl)
+        inc l ; warning, check for l=$ff
+        ld (hl),a ; input1_shadow = input
+        ld a,8
+        call snsmat
+        cpl
+        ld (input1),a
+        ret
+
+    ; ********************************************************************************
+    ; update velocity according to userinput
+    ; --------------------------------------------------------------------------------
+    ; modify: AF, C, HL
+    ; ********************************************************************************
+    update_vel:
+        
+        ; if a counter for horizontal movement exists, decrement
+        ; this is to introduce a delay for each 8 pix. in horizontal movement
+        ld a,(mov_cnt)
+        or a
+        jr z,_nocnt ; if counter is 0 we are not waiting for anything
+        dec a
+        ld (mov_cnt),a
+        or a
+        jr nz,_nocnt
+        ld hl,input1_shadow
+        ld a,(hl)
+        cpl
+        ld (hl),a ; force update of velocity
+
+        _nocnt:
+        ld hl,input1
+        ld a,(hl)
+        inc l ; watch out for l=$ff
+        xor (hl)
+        jr nz,_cnt
+        ret ; input1 = input1 of previous frame, nothing to do
+        
+        _cnt:
+        call down_key
+        call space_key
+
+        ld a,(input1)
+        and KEY_LEFT
+        jp z,++
+        call left_key
+        ld a,MV_CNT_0
+        ld (isright),a
+        ret
+++      ld a,MV_CNT_0
+        ld (isleft),a
+        call right_key
+        ret
+
+    down_key:
+        ld a,(input1)
+        and KEY_DOWN
+        jr nz,+
+        ld a,(slow_vel)
+        ld (vel0.vy),a
+        ld (vel1.vy),a
+        ret
++       ld a,(fast_vel)
+        ld (vel0.vy),a
+        ld (vel1.vy),a
+        ret
+
+    left_key:
+    
+        ld a,(block0.xc)
+        and 7
+        jr z,++
+        ret
+        
+++      ld a,(input1)
+        and KEY_LEFT
+        jr nz,+
+        ld a,MV_CNT_0
+        ld (isleft),a
+        ret
+        ; check free space
++       ld hl,(piece_origin)
+        dec hl
+        push hl
+        call check_available_space
+        pop hl
+        ret nz
+        ld (piece_origin),hl
+        ld hl,(piece_origin_screen)
+        dec hl
+        ld (piece_origin_screen),hl
+        ld a,left_vel
+        ld (vel0.vx),a
+        ld (vel1.vx),a
+        ret
+
+    right_key:
+    
+        ld a,(block0.xc)
+        and 7
+        jr z,++
+        ret
+        
+++      ld a,(input1)
+        and KEY_RIGHT
+        jr nz,+
+        ld a,MV_CNT_0
+        ld (isright),a
+        ret
+        ; check free space
++       ld hl,(piece_origin)
+        inc hl
+        push hl
+        call check_available_space
+        pop hl
+        ret nz
+        ld (piece_origin),hl
+        ld hl,(piece_origin_screen)
+        inc hl
+        ld (piece_origin_screen),hl
+        ld a,right_vel
+        ld (vel0.vx),a
+        ld (vel1.vx),a
+        ret
+
+    space_key:
+        ld a,(input1)
+        and KEY_SPACE
+        jr nz,+
+        xor a
+        ld (lock_space),a
+        ret
++       ld a,(lock_space)
+        or a
+        ret nz
+        ld hl,(currentblock.next)
+        inc a
+        ld (lock_space),a
+        ; check for free space before rotation
+        ld de,virtualblock
+        ld bc,20
+        ldir
+        exx
+        ld hl,(piece_origin)
+        ld de,virtualblock.off0
+        call check_available_space0
+        exx
+        ret nz ; no free space -> do nothing
+        ld hl,(currentblock.next)
+        call change_block
+        ret
+
+.ENDS
+
+.SECTION "Control" FREE
+
+    ; ********************************************************************************
+    ; check that piece moves over free space only
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    check_piece:
+        ld a,(block0.xc)
+        and 7
+        jr z,_cnt
+        ret
+
+        _cnt:
+        ; *** OPT! ***
+        ld a,(vel0.vx)
+        and $f8
+        ret z ; if vx is already 0, do nothing 
+        ; stop the piece if x mod 8 == 0
+        ld a,%00000001
+        ld (vel0.vx),a
+        ld (vel1.vx),a
+
+        ld a,(input1)
+        and KEY_LEFT
+        ld a,(isleft)
+        jr nz,_cnt2
+        ld a,(isright)
+        
+        _cnt2:
+        ; this is MV_CNT_0 if we just press left
+        ; or MV_CNT_1 if we keep pressing left
+        ld (mov_cnt),a
+        ld a,MV_CNT_1
+        ld (isleft),a
+        ld (isright),a
+        ret
+
+
+    ; ********************************************************************************
+    ; If yc % 8 == 0 update the piece position in game RAM area.
+    ; Checks if vertical movement is possible.
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    check_vertical_movement:
+        ; if yc % 8 != 0 return
+        ld a,(block0.yc)
+        inc a ; vertical position of sprite is 1 pixel lower than its y coordinate
+        ld b,a
+        ld a,(ycordcomp)
+        cp b
+        ret nc
+        add a,8
+        ld (ycordcomp),a
+        ld de,16
+        ld hl,(piece_origin)
+        add hl,de
+        push hl
+        call check_available_space
+        pop hl
+        jp z,_space_available ; there is available space, do nothing
+        ; no space available, so 
+        ; let's mark the block as permanent
+        jp set_permanent
+        _space_available:
+        ld (piece_origin),hl
+        ld hl,(piece_origin_screen)
+        ld de,64
+        add hl,de
+        ld (piece_origin_screen),hl
+        ret
+
+    ; ********************************************************************************
+    ; Sets the piece as permanent in game RAM area.
+    ; ********************************************************************************
+    set_permanent:
+        call clear_block
+        call set_current_in_ram
+        
+        ; display permanent piece
+        _display_permanent:
+        ld b,4
+        ld ix,currentblock.off0s
+
+-       exx
+        ld b,0
+        ld hl,(piece_origin_screen)
+        ld c,(ix+0)
+        add hl,bc ; HL = # pattern name (0..4096)
+
+        ; convert to nametable (pat.name*2+7c000)
+        add hl,hl
+        ld de,$c000 ; $e000 for layer b
+        add hl,de
+        ex de,hl
+        ld a,7
+        SetupWriteVRAM 
+        exx
+        ld a,(ix+4) ; get tile of piece
+        ;add a,$40 ; test
+        out ($60),a
+        inc ix
+        djnz -
+
+        ; check if there are completed lines
+        ld hl,(piece_origin)
+        ld de,game_area
+        scf
+        ccf 
+        sbc hl,de
+        ld a,l
+        and $f
+        ld e,a
+        ld d,0
+        ld hl,(piece_origin)
+        sbc hl,de
+        ; now HL points to the origin of the line 
+        ; where the piece is set
+        ; now check this line and the three following
+        ; to see if some line is completed
+        ld a,(currentblock.lins)
+        ld b,a
+-       push bc
+        push hl
+        call check_line
+        pop hl
+        cp 10
+        call z,mark_line
+        cp 9
+        jr nz,+
+
+        ; mark one block remaining
+        push hl
+        pop ix
+        ld (ix+12),one_line_left_tile ; one line left tile
+        
+        ; print the one block remaining hint
+        push bc
+        push hl
+        ld de,game_area
+        sbc hl,de
+        add hl,hl
+        add hl,hl ; hl/16 * 64
+        ld de,141
+        add hl,de
+        ex de,hl
+        pop hl
+        push hl
+        ld bc,12
+        add hl,bc
+        ld b,1
+        call PrintTilesA
+        pop hl
+        pop bc
+
++       pop bc
+        ld de,16
+        add hl,de
+        djnz -
+
+        ; clear marked lines, and move down the remaining
+        ld a,(marked)
+        or a
+        call nz,update_game_area
+ 
+        call trigger_block
+        checks:
+        ld hl,block_score-3
+        ld de,3
+        ld a,(mult)
+        ld b,a
+        inc b
+-       add hl,de
+        djnz -
+        ld b,(hl)
+        inc hl
+        ld c,(hl)
+        inc hl
+        ld d,(hl)
+        ;ld bc,0
+        ;ld d,1 ; just one point
+        call increase_score
+
+        ; setup new block
+        ld hl,(nextblock)
+        ld a,(slow_vel)
+        call setup_block
+
+        ret ; returns to mainloop
+
+    ; ********************************************************************************
+    ; checks if the given line is void or full
+    ; --------------------------------------------------------------------------------
+    ; HL = game area of line to check 
+    ; --------------------------------------------------------------------------------
+    ; return: A = number of non zeros in the line
+    ; modify: A,BC,HL
+    ; ********************************************************************************
+    check_line:
+        ld bc,$0a00 ; 10 positions to check
+        inc hl ; first position is border
+        xor a
+-       cp (hl)
+        jr z,+
+        inc c
++       inc hl
+        djnz -
+        ld a,c
+        ret
+
+    ; ********************************************************************************
+    ; marks the given line with zeros, to be further processed
+    ; --------------------------------------------------------------------------------
+    ; HL = game area of line to mark 
+    ; --------------------------------------------------------------------------------
+    ; modify: BC
+    ; ********************************************************************************
+    mark_line:
+        push hl
+        pop ix
+        ld b,10
+        inc ix
+-       ld (ix+0),0
+        ld a,(ix+16)
+        or a
+        call nz,update_tile_up
+        ld a,(ix-16)
+        or a
+        call nz,update_tile_down
+        inc ix
+        djnz -
+        ld ix,marked
+        inc (ix+0)
+        ret
+
+    update_game_area:
+        call trigger_line ; line score hint
+        ld a,(marked)
+        ld b,a
+        ld a,(nlines2)
+        add a,b
+        ld (nlines2),a
+        ld a,(nlines0)
+        add a,b
+        daa
+        ld (nlines0),a
+        jr nc,++
+        ld a,(nlines1)
+        add a,1
+        daa
+        ld (nlines1),a
+++      call inclevel
+        ;call incbonus
+        ld hl,game_area+21*16
+--      ld (current_line),hl
+        call check_line
+        or a
+        jr nz,++
+        ; line is marked for deletion
+        ; move block info downwards one line
+        _upd_game_0:
+        ld hl,(current_line)
+        ld bc,game_area
+        scf
+        ccf
+        sbc hl,bc
+        ld b,h
+        ld c,l
+        ld hl,(current_line)
+        ld de,15
+        add hl,de
+        ex de,hl
+        ld hl,(current_line)
+        dec hl
+        lddr
+        ld a,(marked)
+        dec a
+        ld (marked),a
+        or a
+        ;call z,trigger_line ; why this hangs?
+        ;ld (marked),a
+        ;or a
+        jp z,update_graphics
+        ld hl,(current_line)
+        jr --
+
+++      ld hl,(current_line)
+        ld de,16
+        scf
+        ccf
+        sbc hl,de
+        jr --
+
+    update_graphics:
+        ld b,22
+        ld de,130
+        ld hl,game_area
+        inc hl
+-       push bc
+        push hl
+        ld b,12
+        call PrintTilesA
+        ld hl,64
+        add hl,de
+        ex de,hl
+        pop hl
+        ld bc,16
+        add hl,bc
+        pop bc
+        djnz -
+        ;call trigger_line 
+        ret
+
+    ; ********************************************************************************
+    ; changes the tile on the lower line of a line marked for deletion
+    ; ********************************************************************************
+    update_tile_up:
+        ld de,up_repl_table ;256 byte aligned !!
+        sub tile_offset
+        ld e,a
+        ld a,(de)
+        ld (ix+16),a
+        ret
+
+    ; ********************************************************************************
+    ; changes the tile on the upper line of a line marked for deletion
+    ; ********************************************************************************
+    update_tile_down:
+        ld de,down_repl_table ;128 byte aligned !!
+        sub tile_offset
+        or $80 ; to align to the 128b boundary
+        ld e,a
+        ld a,(de)
+        ld (ix-16),a
+        ret
+
+    
+    ; ********************************************************************************
+    ; BCD=number of points in BCD :) (max will be 128*256=32768)
+    ; ********************************************************************************
+    increase_score:
+        ld a,(score0)
+        add a,d
+        daa
+        ld (score0),a
+        jr nc,++
+        ld a,(score1)
+        add a,1
+        daa
+        ld (score1),a
+++      ld a,(score1)
+        add a,c
+        daa
+        ld (score1),a
+        jr nc,++
+        ld a,(score2)
+        add a,1
+        daa
+        ld (score2),a
+++      ld a,(score2)
+        add a,b
+        daa
+        ld (score2),a
+        ret nc
+        ld a,(score3)
+        add a,1
+        daa
+        ld (score3),a
+        ret
+
+    inclevel:
+        ld a,(level)
+        cp 4
+        ret z
+        ld hl,(next_levup)
+        ld a,(nlines2)
+        cp (hl)
+        ret c ; is lower?: return
+        inc hl
+        ld (next_levup),hl
+        ld hl,badge_up
+        call print_badge
+        ld hl,level
+        inc (hl)
+        ld hl,(next_speed)
+        inc hl
+        ld (next_speed),hl
+        ld a,(hl)
+        ld (slow_vel),a
+
+        ret
+
+    incbonus:
+        ld a,(mult)
+        cp 7
+        ret z
+        inc a
+        ld (mult),a
+        ret
+
+    decbonus:
+        ld a,(mult)
+        or a
+        ret z
+        dec a
+        ld (mult),a
+        ret
+.ENDS
+
+.SECTION "Sync" FREE
+
+    ; ********************************************************************************
+    ; update time elapsed and tick
+    ; --------------------------------------------------------------------------------
+    ; modify: A, HL
+    ; ********************************************************************************
+    tictac:
+        call update_npc_frames
+        ld hl,tick
+        ld a,(hl)
+        inc a
+        ld (hl),a
+        cp 60
+        ; once every 1/60 sec?
+        ; depends on the video freq.?
+        ; openmsx on windows seem to be at 50hz
+        ; while openmsx in linux seem to be at 60hz ?????
+        ret c
+        ; 1 second elapsed
+        ;call update_npc_frames
+        xor a
+        ld (hl),a
+        ld hl,sec_elapsed
+        ld a,(hl)
+        inc a
+        ;add a,1
+        daa
+        ld (hl),a
+        cp $60
+        ret c
+        xor a
+        ld (hl),a
+        inc hl ; point to min_elapsed
+        ld a,(hl)
+        inc a
+        daa
+        ld (hl),a
+        cp $60 ; if min>60, update hour
+        ret c
+        xor a
+        ld (hl),a
+        inc hl ; points to hour_elapsed
+        ld a,(hl)
+        inc a
+        daa
+        ld (hl),a
+        ret
+
+.ENDS
+
+.SECTION "Labels"
+
+    update_lines:
+        ld hl,temp_msg
+        ld a,(nlines1)
+        call decode_number
+
+        ld a,(nlines0)
+        call decode_number
+
+        ld hl,temp_msg
+        ld b,4
+        ld de,533
+        call PrintTilesA
+        ret
+        
+    update_score:
+        ld hl,temp_msg
+        ld a,(score3)
+        call decode_number
+
+        ld a,(score2)
+        call decode_number
+
+        ld a,(score1)
+        call decode_number
+
+        ld a,(score0)
+        call decode_number
+
+        ld hl,temp_msg
+        ld b,8
+        ld de,529+192
+        call PrintTilesA
+        ret
+        
+    update_clock:
+        ld hl,temp_msg1
+        ld a,(hour_elapsed)
+        call decode_number
+        ld (hl),48
+        inc hl
+        ld a,(min_elapsed)
+        call decode_number
+        ld (hl),48
+        inc hl
+        ld a,(sec_elapsed)
+        call decode_number
+
+        ld hl,temp_msg1
+        ld b,8
+        ld de,64*24+23
+        call PrintTilesA
+        ret
+
+        
+    decode_number:
+        push af
+        and $f0
+        rrca
+        rrca
+        rrca
+        rrca
+        inc a ; to convert to number
+        ld (hl),a
+        inc hl
+        pop af
+        and $0f
+        inc a
+        ld (hl),a
+        inc hl
+        ret
+
+.ENDS
+
+.SECTION "NPC"
+.BLOCK "NPC"
+
+    ; ********************************************************************************
+    ; displays npc
+    ; --------------------------------------------------------------------------------
+    ; modify: AF, C, HL
+    ; ********************************************************************************
+
+    ; @ npc_base there is room for each npc: data is as in struct npc
+    display_npc:
+        ld b,a ; num npcs
+        ld hl,npc_base ; 256 byte aligned!
+-       push hl
+        push bc
+        ld b,(hl) ; num sprites 
+        push bc
+        inc l
+
+        ld e,(hl) 
+        inc l
+        ld d,(hl) ; ld de,(hl) -> de = sprtable
+        push de ; we need this later
+
+        inc l ; hl=veltable
+        push hl
+        ; hl <- (hl)
+        push de
+        ld e,(hl)
+        inc l
+        ld d,(hl)
+        ex de,hl
+        pop de
+
+        call update_positions
+        pop hl
+        inc l
+        inc l ; hl = firstplane
+        ld e,(hl)
+        sla e
+        sla e ; e*4
+        ld d,$fe
+        pop hl ; hl=sprtable
+        pop bc ; b=num sprites
+        sla b
+        sla b ; b*4
+        ld a,3
+        call PutSprites0
+        pop bc ; b=remaining npc
+        pop hl
+        ld a,l
+        add a,8
+        ld l,a ; next npc
+        djnz -
+        ret
+
+    ; decrease the framecnt for each existing npc
+    ; clears npc if framecnt reaches 0
+    update_npc_frames:
+        ld a,(numnpc)
+        or a
+        ret z
+
+        push hl
+        ld b,a ; num npcs
+        ld hl,npc_base+6 ; 256 byte aligned!
+-       push bc
+        dec (hl)
+        jr nz,@nextnpc
+        push hl
+        call clear_npc
+        pop hl
+        jr +
+        @nextnpc:
+        ld a,l
+        add a,8
+        ld l,a
++       pop bc
+        djnz -
+
+        pop hl
+        ret
+
+    clear_npc:
+        ; hide npc sprites
+        exx
+        ld bc,8
+        ld hl,(last_npc)
+        sbc hl,bc
+        ld (last_npc),hl
+        ld hl,numnpc
+        dec (hl)
+        jr nz,+
+        ; just cleared the last npc
+        ld hl,sprttable_base
+        ld (last_sprt),hl
+        xor a
+        ld (last_plane),a
++       exx
+
+        push hl 
+        dec l
+        ld c,(hl) ; plane of sprite
+        ld a,l
+        sub 5
+        ld l,a ; hl = npcbase of the npc to be deleted
+        ld b,(hl) ; b=num sprites
+        ld hl,disable_sprite_data; a bunch of disable sprite data
+        ; c*4, b*4
+        sla c
+        sla c
+        sla b
+        sla b
+        ld d,$fe
+        ld e,c ; de=$fe00+numplane*4
+        ld a,3
+        call PutSprites0
+        
+        pop hl
+        ; clear npc data
+        ld d,h
+        ld a,l
+        sub 6
+        ld e,a ; de=npcbase of the npc to be deleted
+        inc l
+        inc l ; hl=origin of the next npc
+        ld a,(numnpc)
+        ld b,a
+        ; bc <- 8*b
+        inc b ; otherwise if b=0 copies $ffff bytes => crash!
+        ld c,b
+        ld b,0
+        sla c
+        sla c
+        sla c
+        rl b ; not general enough
+        ; bc = num_unprocessed_npc*8 (8=npcdatasize)
+        ldir ; wipe data
+        ret
+    
+    trigger_line:
+        ld a,(marked)
+
+        ; increase score
+        cp 1
+        jr nz,+
+        call decbonus
+        ;ld bc,0
+        ;ld d,$16
+        jr @conttrig
++       cp 2
+        jr nz,+
+        call decbonus
+        ;ld bc,0
+        ;ld d,$32
+        jr @conttrig
++       cp 3
+        jr nz,+
+        ;ld bc,0
+        ;ld d,$64
+        jr @conttrig
+        ;ld bc,1
+        ;ld d,$28
++       call incbonus ; player completed a tetris
+
+        @conttrig:
+        ld hl,lin_score-3
+        ld de,3
+        ld a,(mult)
+        ld c,a
+        ld a,(marked)
+        add a,c
+        ld b,a
+        ;inc b
+-       add hl,de
+        djnz -
+        ld b,(hl)
+        inc hl
+        ld c,(hl)
+        inc hl
+        ld d,(hl)
+        call increase_score        
+        call print_bonus
+        ld hl,lin1h-6
+
+        ld a,(mult)
+        ld c,a
+        ld a,(marked)
+        add a,c
+        ld b,a
+        ;dec b
+        ld de,6
+-       add hl,de
+        djnz -
+        ex de,hl
+        ld b,6
+        ld hl,block1
+        ld ix,hint_y
+        ld a,(hl)
+        add a,8
+        ld (ix+0),a ; y
+        inc hl
+        inc hl
+        ld a,(hl)
+        ld (ix+2),a ; x in the middle
+        call trigger_hint
+        ret
+
+    trigger_block:
+        ld a,(level)
+        cp 4
+        ret z
+        ld hl,block1h-6
+        ld de,6
+        ld a,(mult)
+        ld b,a
+        inc b
+-       add hl,de
+        djnz -
+        ex de,hl
+
+        ld b,4
+        ld ix,block1 ; get the coords of the block
+        call trigger_hint
+        ret
+
+    ; ********************************************************************************
+    ; Creates a score hint
+    ; --------------------------------------------------------------------------------
+    ; B=number of digits (up to 8, not checked)
+    ; DE=pointer to B bytes with the patterns of the sprites
+    ; in (hint_ini_cord): ycoord,xcoord of initial sprite
+    ; IX=initial coordinates IX+0 <- ycoord, IX+2 <- xcoord
+    ; --------------------------------------------------------------------------------
+    ; modify: all
+    ; ********************************************************************************
+    trigger_hint:
+        ld hl,(last_sprt)
+        push bc
+        xor a
+-       push af
+        ld c,(ix+0) ; ini ycoord
+        ld (hl),c ; copy y
+        inc l
+        ex af,af'
+        ld a,(de)
+        ld (hl),a ; sprpattern
+        ex af,af'
+        inc l
+        ld c,(ix+2) ; ini xcoord
+        add a,c
+        ld (hl),a ; copy x
+        pop af
+        add a,6 ; next sprite in hint 6px to the right
+        inc de
+        inc l
+        inc l
+        djnz -
+
+        pop bc ; restore num sprites in b
+        ld ix,(last_npc)
+        ld (ix+0),b ; num sprites
+        ld hl,(last_sprt)
+        ld (ix+1),l
+        ld (ix+2),h
+        ld de,veltable_base
+        ld (ix+3),e
+        ld (ix+4),d
+        ld a,(last_plane)
+        ld (ix+5),a ; sprite plane. should be 8*npcnum to be sure in this case
+        add a,8
+        ld (last_plane),a
+        ld (ix+6),npc_numframes
+        
+        ld iy,(last_sprt)
+        ld bc,32 ; adding 8 sprites, each sprite takes 4 bytes
+        add iy,bc
+        ld (last_sprt),iy
+
+        ld bc,8 ; npcdata size = 8 bytes
+        add ix,bc
+        ld (last_npc),ix
+
+        ld hl,numnpc
+        inc (hl)
+
+        ret
+
+block1h:
+.db 38,47,47,47,47,47 ;1
+.db 39,47,47,47,47,47 ;2
+.db 41,47,47,47,47,47 ;4
+.db 45,47,47,47,47,47 ;8
+lin1h:
+.db 38,43,47,47,47,47 ;16
+.db 40,39,47,47,47,47 ;32
+.db 43,41,47,47,47,47 ;64
+.db 38,39,45,47,47,47 ;128
+.db 39,42,43,47,47,47 ;256
+.db 42,38,39,47,47,47 ;512
+.db 38,37,39,41,47,47 ;1024
+.db 39,37,41,45,47,47 ;2048
+.db 41,37,46,43,47,47 ;4096
+.db 45,38,46,39,47,47 ;8192
+.db 38,43,40,45,41,47 ;16384
+
+block_score:
+.db $00,$00,$01 ; score 1 point
+.db $00,$00,$02 ; score 2 point
+.db $00,$00,$04 ; score 4 point
+.db $00,$00,$08 ; score 8 point
+lin_score:
+.db $00,$00,$16 ; score 16 point
+.db $00,$00,$32 ; score 32 point
+.db $00,$00,$64 ; score 64 point
+.db $00,$01,$28 ; score 128 point
+.db $00,$02,$56 ; score 256 point
+.db $00,$05,$12 ; score 512 point
+.db $00,$10,$24 ; score 1024 point
+.db $00,$20,$48 ; score 2048 point
+.db $00,$40,$96 ; score 4096 point
+.db $00,$81,$92 ; score 8192 point
+.db $01,$63,$84 ; score 16384 point
+
+
+npcveltab:
+.DB npc_upvel,0
+
+.ENDB
+.ENDS
+
+;======================================================================== ; Data sections
+; -----------------------------------------------------------------------
+; Forced start at $6000.
+;========================================================================
+.BANK 0
+.ORGA $4b00
+
+;.BLOCK "Game data"
+; mod 3 table
+mod3:
+.REPEAT 85
+    .DB 0,1,2
+.ENDR
+.DB 0
+
+.ORGA $4c00
+up_repl_table:
+.DB 0
+.DB tile_offset+1,tile_offset+2,tile_offset+3,tile_offset+9,tile_offset+13,tile_offset+6,tile_offset+14,tile_offset+11,tile_offset+9,tile_offset+2,tile_offset+11,tile_offset+3,tile_offset+13,tile_offset+14 ; T block
+.DB tile_offset+15,tile_offset+22,tile_offset+17,tile_offset+18,tile_offset+19,tile_offset+25,tile_offset+15,tile_offset+22,tile_offset+23,tile_offset+18,tile_offset+25 ; J block
+.DB tile_offset+26,tile_offset+27,tile_offset+36,tile_offset+29,tile_offset+26,tile_offset+29,tile_offset+32,tile_offset+33,tile_offset+27,tile_offset+35,tile_offset+36 ; L block
+.DB tile_offset+37,tile_offset+44,tile_offset+39,tile_offset+45,tile_offset+41,tile_offset+42,tile_offset+42,tile_offset+44,tile_offset+45 ; S block
+.DB tile_offset+46,tile_offset+47,tile_offset+53,tile_offset+54,tile_offset+50,tile_offset+51,tile_offset+50,tile_offset+53,tile_offset+54 ; Z block
+.DB tile_offset+55,tile_offset+56,tile_offset+57,tile_offset+58,tile_offset+58,tile_offset+61,tile_offset+61 ; straight block
+.DB tile_offset+62,tile_offset+63,tile_offset+66,tile_offset+67,tile_offset+66,tile_offset+67 ; square block
+;.DB 1,2,3,9,13,6,14,11,9,2,11,3,13,14 ; T block
+;.DB 15,22,17,18,19,25,15,22,23,18,25 ; J block
+;.DB 26,27,36,29,26,29,32,33,27,35,36 ; L block
+;.DB 37,44,39,45,41,42,42,44,45 ; S block
+;.DB 46,47,53,54,50,51,50,53,54 ; Z block
+;.DB 55,56,57,58,58,61,61 ; straight block
+;.DB 62,63,66,67,66,67 ; square block
+.ORGA $4c7f
+.DB 255
+
+.ORGA $4c80
+down_repl_table:
+.DB 0
+.DB tile_offset+9,tile_offset+2,tile_offset+3,tile_offset+4,tile_offset+10,tile_offset+11,tile_offset+12,tile_offset+8,tile_offset+9,tile_offset+10,tile_offset+11,tile_offset+12,tile_offset+2,tile_offset+3 ; T block
+.DB tile_offset+25,tile_offset+16,tile_offset+17,tile_offset+18,tile_offset+22,tile_offset+20,tile_offset+20,tile_offset+22,tile_offset+18,tile_offset+24,tile_offset+25 ; J block
+.DB tile_offset+36,tile_offset+27,tile_offset+28,tile_offset+29,tile_offset+28,tile_offset+31,tile_offset+29,tile_offset+33,tile_offset+34,tile_offset+27,tile_offset+36 ; L block
+.DB tile_offset+45,tile_offset+38,tile_offset+42,tile_offset+40,tile_offset+44,tile_offset+42,tile_offset+43,tile_offset+44,tile_offset+45 ; S block
+.DB tile_offset+54,tile_offset+50,tile_offset+48,tile_offset+49,tile_offset+50,tile_offset+53,tile_offset+52,tile_offset+53,tile_offset+54 ; Z block
+.DB tile_offset+55,tile_offset+56,tile_offset+57,tile_offset+61,tile_offset+60,tile_offset+60,tile_offset+61 ; straight block
+.DB tile_offset+66,tile_offset+67,tile_offset+64,tile_offset+65,tile_offset+66,tile_offset+67 ; square block
+;.DB 9,2,3,4,10,11,12,8,9,10,11,12,2,3 ; T block
+;.DB 25,16,17,18,22,20,20,22,18,24,25 ; J block
+;.DB 36,27,28,29,28,31,29,33,34,27,36 ; L block
+;.DB 45,38,42,40,44,42,43,44,45 ; S block
+;.DB 54,50,48,49,50,53,52,53,54 ; Z block
+;.DB 55,56,57,61,60,60,61 ; straight block
+;.DB 66,67,64,65,66,67 ; square block
+.ORGA $4cff
+.DB 255
+
+.ASCIITABLE
+MAP 'A' TO 'Z' = $b
+.ENDA
+
+game_over_msg:
+.ASC "GAME"
+.DB 47
+.ASC "OVER"
+
+zero_line:
+.DB 43
+
+first_line:
+.DB 37,38
+.REPEAT 10
+.DB 47
+.ENDR
+;.DB 40,37,42
+.DB 43,0
+
+second_line:
+.DB 0,39
+.REPEAT 10
+.DB 47
+.ENDR
+.DB 43,0
+
+last_line:
+.DB 0,41
+.REPEAT 10
+.DB 46
+.ENDR
+.DB 42,0
+
+frame0:
+;.DB 40,37,37,37,37,38
+.DS 6,0
+frame1:
+;.DB 43,47,47,47,47,39
+.DS 6,0
+frame2:
+;.DB 44,46,46,46,46,45
+.DS 6,0
+
+backgrnd0:
+.DB 1,2,3,4,5,1,2,3,4,5,1,2,3,4,5
+backgrnd1:
+.DB 6,7,8,9,10,6,7,8,9,10,6,7,8,9,10
+backgrnd2:
+.DB 11,12,13,14,15,11,12,13,14,15,11,12,13,14,15
+
+;decoblock0:
+;.DB 116,117,118,116,117,118,116,117,118,116,117,118
+;decoblock1:
+;.DB 119,120,121,119,120,121,119,120,121,119,120,121
+;decoblock2:
+;.DB 122,123,124,122,123,124,122,123,124,122,123,124
+decoblock0:
+.DB 16,17,18,16,17,18,16,17,18,16,17,18,16,17,18,16,17,18,16,17,18,
+decoblock1:
+.DB 19,20,21,19,20,21,19,20,21,19,20,21,19,20,21,19,20,21,19,20,21
+decoblock2:
+.DB 22,23,24,22,23,24,22,23,24,22,23,24,22,23,24,22,23,24,22,23,24
+
+
+next_msg:
+.ASC "NEXT"
+
+lines_msg:
+.ASC "LINES"
+
+score_msg:
+.asc "SCORE"
+
+level_msg:
+.asc "LEVEL"
+
+bonus_msg:
+.asc "BONUS"
+
+badge_up:
+.db 125
+
+badge_down:
+.db 124
+
+bonus_on:
+.db 122
+
+bonus_off:
+.db 123,123,123,123,123,123,123,123
+
+time_msg:
+.ASC "PLAY"
+.DB 0
+.ASC "TIME"
+
+; speed of the falling block at different levels
+spd_table:
+;.db %00001100,%00001011,%00001010,%00010011,%00001001,%00010001
+;.db %00001100,%00001011,%00001010,%00001001,%00011010
+.db %00001100,%00001011,%00001010,%00001001,%00010001
+
+levup_table:
+.db 16,32,64,128
+;.db 2,4,6,8
+
+; -----------------------------------------------------------------------
+; piece definitions as instances of struct block
+; -----------------------------------------------------------------------
+
+.SECTION "Pieces" SEMIFREE
+.BLOCK "PieceData"
+; piece
+;  @
+; @@@
+b0: 
+.DB 9,10,16,0,2,0
+.DW b1 
+.DB 1,15,1,1
+.DB 1,64,65,66 ; pattern offset
+.DB tile_offset+1,tile_offset+2,tile_offset+8,tile_offset+3 ; tiles
+b1:
+.DB 11,12,0,16,3,0
+.DW b2
+.DB 0,16,1,15
+.DB 0,64,65,128
+;.DB 1,5,3,4 
+.DB tile_offset+1,tile_offset+5,tile_offset+3,tile_offset+4 
+b2:
+.DB 13,14,16,0,2,0
+.DW b3
+.DB 0,1,1,15
+.DB 0,1,2,65
+;.DB 2,6,3,4
+.DB tile_offset+2,tile_offset+6,tile_offset+3,tile_offset+4
+b3:
+.DB 15,16,0,16,3,0
+.DW b0
+.DB 1,15,1,16
+.DB 1,64,65,129
+;.DB 1,2,7,4
+.DB tile_offset+1,tile_offset+2,tile_offset+7,tile_offset+4
+
+; piece
+; @@@
+; @
+b4:
+.DB 27,28,16,0,2,0
+.DW b5
+.DB 0,1,1,14
+.DB 0,1,2,64
+.DB tile_offset+32,tile_offset+33,tile_offset+27,tile_offset+28
+b5:
+.DB 30,29,0,16,3,0
+.DW b6
+.DB 0,1,16,16
+.DB 0,1,65,129
+.DB tile_offset+29,tile_offset+35,tile_offset+30,tile_offset+28
+b6:
+.DB 31,32,16,0,2,0
+.DW b7
+.DB 2,14,1,1
+.DB 2,64,65,66
+.DB tile_offset+26,tile_offset+29,tile_offset+33,tile_offset+34
+b7:
+.DB 25,26,0,16,3,0
+.DW b4
+.DB 0,16,16,1
+.DB 0,64,128,129
+.DB tile_offset+26,tile_offset+30,tile_offset+31,tile_offset+27
+
+; piece
+; @@@
+;   @
+b8:
+.DB 21,22,16,0,2,0
+.DW b9
+.DB 0,1,1,16
+.DB 0,1,2,66
+.DB tile_offset+22,tile_offset+17,tile_offset+23,tile_offset+20
+b9:
+.DB 24,23,0,16,3,0
+.DW b10
+.DB 1,16,15,1
+.DB 1,65,128,129
+.DB tile_offset+15,tile_offset+21,tile_offset+22,tile_offset+24
+b10:
+.DB 17,18,16,0,2,0
+.DW b11
+.DB 0,16,1,1
+.DB 0,64,65,66
+.DB tile_offset+15,tile_offset+16,tile_offset+17,tile_offset+18
+b11:
+.DB 19,20,0,16,3,0
+.DW b8
+.DB 0,1,15,16
+.DB 0,1,64,128
+.DB tile_offset+19,tile_offset+18,tile_offset+21,tile_offset+20
+
+; piece
+; @@@@
+b12:
+.DB 33,34,16,0,1,0
+.DW b13
+.DB 0,1,1,1
+.DB 0,1,2,3
+.DB tile_offset+55,tile_offset+56,tile_offset+56,tile_offset+57
+b13:
+.DB 35,36,0,16,4,0
+.DW b12
+.DB 0,16,16,16
+.DB 0,64,128,192
+.DB tile_offset+58,tile_offset+59,tile_offset+59,tile_offset+60
+
+; piece
+;  @@
+; @@
+b14:
+.DB 3,4,16,0,2,0
+.DW b15
+.DB 1,1,14,1
+.DB 1,2,64,65
+.DB tile_offset+41,tile_offset+42,tile_offset+44,tile_offset+43
+b15:
+.DB 1,2,0,16,3,0
+.DW b14
+.DB 0,16,1,16
+.DB 0,64,65,129
+.DB tile_offset+37,tile_offset+38,tile_offset+39,tile_offset+40
+
+; piece
+; @@
+;  @@
+b16:
+.DB 7,8,16,0,2,0
+.DW b17
+.DB 0,1,16,1
+.DB 0,1,65,66
+.DB tile_offset+50,tile_offset+51,tile_offset+52,tile_offset+53
+b17:
+.DB 5,6,0,16,3,0
+.DW b16
+.DB 1,15,1,15
+.DB 1,64,65,128
+.DB tile_offset+46,tile_offset+47,tile_offset+48,tile_offset+49
+
+; piece
+; @@
+; @@
+b18:
+.DB 0,0,0,0,2,0
+.DW b18
+.DB 0,1,15,1
+.DB 0,1,64,65
+.DB tile_offset+62,tile_offset+63,tile_offset+64,tile_offset+65
+
+piece_list:
+.DW b0,b4,b8,b12,b14,b16,b18,b18
+;.DW b16,b14,b16,b14,b14,b16,b18,b18
+
+
+.ENDB
+
+
+.ENDS
+
+.SECTION "GraphicData" SEMIFREE
+.BLOCK "GraphicData"
+
+patterns:
+.INCBIN "sprites.sc5" READ $1800 ; 256x48 pixels
+tiles:
+.INCBIN "tiles.sc5" READ $1000 ; 256x32 pixels
+tilesb:
+.INCBIN "tilesB.sc5" READ $400 ; 256x8 pixels
+
+.ENDB
+.ENDS
+

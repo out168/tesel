@@ -1,0 +1,66 @@
+A tessellation game. 
+
+WARNING
+
+I made this game with the sole purpose of learning, both the (almost)
+complete design of one of the simplest games, and the internals of the
+V9990 P1 mode.
+
+This software has been developed in Linux, and tested on the OpenMSX 
+emulator only.
+
+TODO
+
+Add some screenshots.
+
+REQUIREMENTS
+
+* MSX with 8kb RAM
+* V9990
+* wla-z80 assembler (www.villehelin.com/wla.html) and make to build the rom
+
+GAME PLAY
+
+* Objective
+Tesselate the given part of the plane as best as you can.
+
+* Controls
+Left, right.
+Space -> rotate block.
+Down -> increase block speed (keep pressed)
+
+* Levels
+The level is increased after 16, 32, 64, and 128 lines are completed.
+Of course, a level increase leads to faster falling blocks.
+
+* Score
+Setting a block: 1pt.
+Completing one line: 16pt.
+Completing two lines: 32pt.
+Completing three lines: 64pt.
+Completing four lines: 128pt.
+
+* Bonus
+The game starts at bonus level of 1, and the maximum bonus level is 8.
+Each bonus level doubles the points obtained. The bonus level is
+increased for every QUAD that is completed (clearing 4 lines
+simultaneously). If 3 lines are cleared simultaneously, the bonus 
+level is unchanged. In the remaining two cases, the bonus level is
+decreased by one.  
+
+KNOWN ISSUES
+
+The code is rather ugly, experimental and not optimized. It had a good 
+start, and ended badly. It is a sort of 'lets get the things done'
+code.
+
+The game lacks sound and music.
+
+The game lacks intro screen and credits.
+
+There is a problem with the movement of the falling block. Seldom
+there is a mismatch between the sprite that represents the block and
+the position in the RAM. I cannot reproduce this behavior at will, so
+it is very probable that this problem will remain unfixed.
+
+
