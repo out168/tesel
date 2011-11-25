@@ -1,85 +1,279 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
+
 <head>
-  <meta charset='utf-8'>
+<style>
 
-  <title>out168/tesel @ GitHub</title>
+body {
+    background: #9090f0;
+    border: 1px solid #8787a7;
+    width: 50%;
+    height: 50%;
+    margin-left: 25%;
+    margin-right: 25%;
+    text-align: center;
+    font-family: sans-serif;
+    -moz-box-shadow: 0px 0px 4px #808080;
+    -webkit-box-shadow: 0px 0px 4px #808080;
+}
 
-  <style type="text/css">
-    body {
-      margin-top: 1.0em;
-      background-color: #8cee24;
-      font-family: Helvetica, Arial, FreeSans, san-serif;
-      color: #000000;
-    }
-    #container {
-      margin: 0 auto;
-      width: 700px;
-    }
-    h1 { font-size: 3.8em; color: #7311db; margin-bottom: 3px; }
-    h1 .small { font-size: 0.4em; }
-    h1 a { text-decoration: none }
-    h2 { font-size: 1.5em; color: #7311db; }
-    h3 { text-align: center; color: #7311db; }
-    a { color: #7311db; }
-    .description { font-size: 1.2em; margin-bottom: 30px; margin-top: 30px; font-style: italic;}
-    .download { float: right; }
-    pre { background: #000; color: #fff; padding: 15px;}
-    hr { border: 0; width: 80%; border-bottom: 1px solid #aaa}
-    .footer { text-align:center; padding-top:30px; font-style: italic; }
-  </style>
+.button {
+    background:#d0d0e0;
+    color:#404040;
+    padding: 2px;
+    //-moz-box-shadow: 0px 0px 2px #404080;
+    //-webkit-box-shadow: 1px 1px 1px #404080;
+    //text-shadow: 1px 1px 1px #404080;
+    border: 1px;
+    border-radius: 4px;
+    -moz-border-radius: 4px;
+    border-style: solid;
+    border-color:#909090;
+    text-decoration: none; 
+    background: -webkit-gradient(
+        linear,left top,left bottom,
+        color-stop(  0%,rgba(208,208,224,1)),
+        color-stop( 60%,rgba(208,208,208,1)),
+        color-stop(100%,rgba(176,176,192,1))
+    );
+    background: -moz-linear-gradient(
+        top,
+        rgba(208,208,224,1) 0%,
+        rgba(208,208,208,1) 60%,
+        rgba(176,176,192,1) 100%
+    );
+}
+
+header {
+    border: 2px;
+    //border-style: solid;
+    border-color: #000000;
+    border-radius: 5px;
+    -moz-border-radius: 5px;
+    padding: 3px;
+    color: #6060e0;
+    color: #0000d0;
+    font-weight: 900;
+    -webkit-box-shadow: 2px 2px 2px #808080;
+    -moz-box-shadow: 2px 2px 2px #808080;
+    font-size:x-large;
+    background: -webkit-gradient(
+        linear,left top,left bottom,
+        color-stop(  0%,rgba(208,208,240,1)),
+        color-stop( 60%,rgba(192,192,224,1)),
+        color-stop(100%,rgba(144,144,176,1))
+    );
+    background: -moz-linear-gradient(
+        top,
+        rgba(208,208,224,1) 0%,
+        rgba(208,208,208,1) 60%,
+        rgba(176,176,192,1) 100%
+    );
+    text-shadow: 1px 1px 1px #000000;
+}
+
+section {
+    border: 2px;
+    //border-style: solid;
+    border-color: #000000;
+    border-radius: 5px;
+    -moz-border-radius: 5px;
+    padding: 3px;
+    color: #ff3030;
+    background: #f0f0f0;
+    font-weight: 900;
+    -webkit-box-shadow: 2px 2px 2px #808080;
+    -webkit-text-shadow: 2px 2px 2px #000000;
+    //text-shadow: 1px 1px 1px #000000;
+    -moz-box-shadow: 2px 2px 2px #808080;
+    font-size:large;
+    text-align: left;
+}
+
+h1 {
+    border: 2px;
+    border-style: solid;
+    border-color: #000000;
+    border-radius: 5px;
+    -moz-border-radius: 5px;
+    padding: 3px;
+    text-align: left
+}
+
+div {
+    background: #d0d0d0;
+    padding: 20px;
+}
+
+p {
+    text-align: left;
+}
+
+li {
+    text-align: left;
+}
+
+</style>
 </head>
 
 <body>
-  <a href="https://github.com/out168/tesel"><img style="position: absolute; top: 0; right: 0; border: 0;" src="http://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub" /></a>
 
-  <div id="container">
+<div>
 
-    <div class="download">
-      <a href="https://github.com/out168/tesel/zipball/master">
-        <img border="0" width="90" src="https://github.com/images/modules/download/zip.png"></a>
-      <a href="https://github.com/out168/tesel/tarball/master">
-        <img border="0" width="90" src="https://github.com/images/modules/download/tar.png"></a>
-    </div>
+<header>A teselation game for V9990</header>
 
-    <h1><a href="https://github.com/out168/tesel">tesel</a>
-      <span class="small">by <a href="https://github.com/out168">out168</a></span></h1>
+<br>
 
-    <div class="description">
-      A tesselation (!) game for the MSX and V9990 
-    </div>
+<section>WARNING</section>
 
-    
+<p>
+I made this game with the sole purpose of learning, both the (almost)
+complete design of one of the simplest possible games, and the internals of the
+V9990 P1 mode.
+</p>
 
-    
+<p>
+This software has been developed in Linux, and tested on the OpenMSX 
+emulator only.
+</p>
 
-    
+<p>
+This is open source software, so use with care ;).
+</p>
 
-    
+<section>Requirements and technical info</section>
 
-    
-      <h2>Authors</h2>
-      <p>out168 <br/>      </p>
-    
+<p>
+<ul>
+    <li>MSX with 8kb RAM
+    </li>
+    <li>V9990
+    </li>
+    <li>wla-z80 assembler (<a href="http://www.villehelin.com/wla.html">www.villehelin.com/wla.html</a>) and make to build the rom
+    </li>
+</ul>
+</p>
 
-    
+<p>
+The game comes in a 16 kB rom, most of which are the uncompressed graphics.
+</p>
 
-    <h2>Download</h2>
-    <p>
-      You can download this project in either
-      <a href="https://github.com/out168/tesel/zipball/master">zip</a> or
-      <a href="https://github.com/out168/tesel/tarball/master">tar formats.
-    </p>
-    <p>You can also clone the project with <a href="http://git-scm.com">Git</a>
-      by running:
-      <pre>$ git clone git://github.com/out168/tesel</pre>
-    </p>
+<p>
+The game makes heavy use of the sprites to achieve a smooth movement. 
+The falling blocks, score hints and the block under the NEXT label are sprites. 
+Everything else are tiles.
+</p>
+<p>
+The two layers available are used to provide a not-so-dull background. Gray and
+slate blue backgrounds are on layer B, the rest, more colorful on layer A.
+Note that the blocks are nicely trimmed when lines are completed (see the
+screenshots).
+</p>
 
-    <div class="footer">
-      get the source code on GitHub : <a href="https://github.com/out168/tesel">out168/tesel</a>
-    </div>
+<p> The game runs approximately at 60 FPS. The timer on the lower right is off
+by one second every 20 minutes approximately.
+</p>
 
-  </div>
+<section>Game Play</section>
+
+<p>
+Objective: 
+Tesselate the given part of the plane as best as you can.
+</p>
+
+<p>
+Controls: 
+<ul>
+<li>
+Left and Right: move block
+</li>
+<li>
+Space: rotate block
+</li>
+<li>
+Down: increase block falling speed (keep pressed)
+</li>
+</ul>
+</p>
+
+<p>
+Levels: The level is increased after 16, 32, 64, and 128 lines are completed.
+Of course, a level increase leads to faster falling blocks.
+</p>
+
+<p>
+Score:
+<ul>
+<li>
+Setting a block: 1pt.
+</li>
+<li>
+Completing one line: 16pt.
+</li>
+<li>
+Completing two lines simultaneously: 32pt.
+</li>
+<li>
+Completing three lines simultaneously: 64pt.
+</li>
+<li>
+Completing four lines simultaneously: 128pt.
+</li>
+</ul>
+</p>
+
+<p>
+Bonus: The game starts at bonus level of 1, and the maximum bonus level is 8.
+Each bonus level doubles the points obtained. The bonus level is
+increased for every QUAD that is completed (clearing 4 lines
+simultaneously). If 3 lines are cleared simultaneously, the bonus 
+level is unchanged. In the remaining two cases, the bonus level is
+decreased by one.  
+</p>
+
+<p>
+Info: The triangle that appears at the right of the playing area indicates
+that the line is only one space away of being completed.
+</p>
+
+<section>Known issues</section>
+
+<p>
+The code is rather ugly, experimental and not optimized. It had a good 
+start, and ended badly. It is a sort of 'lets get the things done'
+code.
+</p>
+
+<p>
+The game lacks sound and music.
+</p>
+
+<p>
+The game lacks intro screen and credits. Therefore, after a game over, 
+you must reset the computer to play again.
+</p>
+
+<p>
+There is a problem with the movement of the falling block. Seldom
+there is a mismatch between the sprite that represents the block and
+the position in the RAM. I cannot reproduce this behavior at will, so
+it is very probable that this problem will remain unfixed.
+</p>
+
+<section>Screenshots</section>
+
+<table>
+<tr>
+    <td><img src='screenshot4.png'/></td>
+</tr>
+<tr>
+    <td><img src='screenshot5.png'/></td>
+</tr>
+<tr>
+    <td><img src='screenshot6.png'/></td>
+</tr>
+</table>
+
+</div>
 
 </body>
-</html>
