@@ -479,6 +479,18 @@
     ; print game area
     ; ********************************************************************************
     print_game_area:
+        ld b,27
+        ld de,0
+-       push bc
+        ld hl,clear_line
+        ld b,32
+        call PrintTilesA
+        pop bc
+        ld hl,64
+        add hl,de
+        ex de,hl
+        djnz -
+
         ld hl,zero_line
         ld b,1
         ld de,76
@@ -1848,26 +1860,18 @@
     trigger_line:
         ld a,(marked)
 
-        ; increase score
+        ; process bonus
         cp 1
         jr nz,+
         call decbonus
-        ;ld bc,0
-        ;ld d,$16
         jr @conttrig
 +       cp 2
         jr nz,+
         call decbonus
-        ;ld bc,0
-        ;ld d,$32
         jr @conttrig
 +       cp 3
         jr nz,+
-        ;ld bc,0
-        ;ld d,$64
         jr @conttrig
-        ;ld bc,1
-        ;ld d,$28
 +       call incbonus ; player completed a tetris
 
         @conttrig:
@@ -2099,6 +2103,11 @@ game_over_msg:
 .ASC "GAME"
 .DB 47
 .ASC "OVER"
+
+clear_line:
+.REPEAT 32
+.DB 47
+.ENDR
 
 zero_line:
 .DB 43
